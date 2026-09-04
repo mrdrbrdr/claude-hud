@@ -5,4 +5,5 @@ export declare function getTerminalWidth(options?: {
     fallback?: number | null;
 }): number | null;
 export declare function getAdaptiveBarWidth(): number;
+export declare function resolveBarWidth(configuredBarWidth: number | null | undefined): number;
 //# sourceMappingURL=terminal.d.ts.map

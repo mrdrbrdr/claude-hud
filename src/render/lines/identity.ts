@@ -3,8 +3,8 @@ import {
   getContextPercent,
   getBufferedPercent,
 } from "../../stdin.js";
-import { coloredBar, label, getContextColor, RESET } from "../colors.js";
-import { getAdaptiveBarWidth } from "../../utils/terminal.js";
+import { coloredBar, labeledBar, label, getContextColor, RESET } from "../colors.js";
+import { resolveBarWidth } from "../../utils/terminal.js";
 import { t } from "../../i18n/index.js";
 import {
   progressLabel,
@@ -41,10 +41,23 @@ export function renderIdentityLine(
   const contextValue = formatContextValue(ctx, percent, contextValueMode);
   const contextValueDisplay = `${getContextColor(percent, colors, contextThresholds)}${contextValue}${RESET}`;
 
-  let line =
-    display?.showContextBar !== false
-      ? `${progressLabel("label.context", colors, labelOptions)} ${coloredBar(percent, getAdaptiveBarWidth(), colors, contextThresholds)} ${contextValueDisplay}`
-      : `${progressLabel("label.context", colors, labelOptions)} ${contextValueDisplay}`;
+  // Personal fork addition (Sep 5 2026): barLabelStyle "inline" overlays the
+  // percent on the bar itself (labeledBar) instead of printing it after the
+  // bar, and skips the separate contextValueDisplay since it's now redundant.
+  const inlineLabel = display?.barLabelStyle === "inline";
+  const barWidth = resolveBarWidth(ctx.config?.barWidth);
+
+  let line: string;
+  if (display?.showContextBar === false) {
+    line = `${progressLabel("label.context", colors, labelOptions)} ${contextValueDisplay}`;
+  } else if (inlineLabel) {
+    const barColor = getContextColor(percent, colors, contextThresholds);
+    const bar = labeledBar(percent, barWidth, barColor, `${Math.round(percent)}%`);
+    line = `${progressLabel("label.context", colors, labelOptions)} ${bar}`;
+  } else {
+    const bar = coloredBar(percent, barWidth, colors, contextThresholds);
+    line = `${progressLabel("label.context", colors, labelOptions)} ${bar} ${contextValueDisplay}`;
+  }
 
   if (display?.showTokenBreakdown !== false && percent >= (display?.contextCriticalThreshold ?? 85)) {
     const usage = ctx.stdin.context_window?.current_usage;

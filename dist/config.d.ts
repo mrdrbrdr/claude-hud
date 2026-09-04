@@ -1,5 +1,6 @@
 import type { Language } from './i18n/types.js';
 export type LineLayoutType = 'compact' | 'expanded';
+export type BarLabelStyle = 'suffix' | 'inline';
 export type AutocompactBufferMode = 'enabled' | 'disabled';
 export type ContextValueMode = 'percent' | 'tokens' | 'remaining' | 'both';
 export type UsageValueMode = 'percent' | 'remaining';
@@ -81,6 +82,9 @@ export interface HudConfig {
     pathLevels: PathLevels;
     maxWidth: number | null;
     forceMaxWidth: boolean;
+    /** Fixed bar width in cells, overriding the terminal-size-based adaptive
+     *  tiers (getAdaptiveBarWidth) when set. null = old adaptive behavior. */
+    barWidth: number | null;
     elementOrder: HudElement[];
     projectLineOrder: FirstLineSegment[];
     gitStatus: {
@@ -131,6 +135,10 @@ export interface HudConfig {
         showClaudeCodeVersion: boolean;
         showEffortLevel: boolean;
         effortFormat: EffortFormatMode;
+        /** Personal fork addition (Sep 5 2026): 'inline' overlays the percent
+         *  label on the context/usage bars (labeledBar) instead of printing it
+         *  after the bar. 'suffix' (default) is the original upstream behavior. */
+        barLabelStyle: BarLabelStyle;
         showMemoryUsage: boolean;
         showPromptCache: boolean;
         promptCacheTtlSeconds: number;

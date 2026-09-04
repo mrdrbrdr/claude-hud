@@ -13,6 +13,10 @@ const MAX_CONFIG_NESTING_DEPTH = 8;
 const UNSAFE_CONFIG_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 export type LineLayoutType = 'compact' | 'expanded';
+// Personal fork addition (Sep 5 2026): 'inline' overlays the percent label
+// directly on the bar (reverse video over the filled/empty run) instead of
+// printing it after the bar. See render/colors.ts's labeledBar().
+export type BarLabelStyle = 'suffix' | 'inline';
 
 export type AutocompactBufferMode = 'enabled' | 'disabled';
 export type ContextValueMode = 'percent' | 'tokens' | 'remaining' | 'both';
@@ -172,6 +176,9 @@ export interface HudConfig {
   pathLevels: PathLevels;
   maxWidth: number | null;
   forceMaxWidth: boolean;
+  /** Fixed bar width in cells, overriding the terminal-size-based adaptive
+   *  tiers (getAdaptiveBarWidth) when set. null = old adaptive behavior. */
+  barWidth: number | null;
   elementOrder: HudElement[];
   projectLineOrder: FirstLineSegment[];
   gitStatus: {
@@ -233,6 +240,10 @@ export interface HudConfig {
     showEffortLevel: boolean;
     // How the effort renders when showEffortLevel is on (see EffortFormatMode).
     effortFormat: EffortFormatMode;
+    /** Personal fork addition (Sep 5 2026): 'inline' overlays the percent
+     *  label on the context/usage bars (labeledBar) instead of printing it
+     *  after the bar. 'suffix' (default) is the original upstream behavior. */
+    barLabelStyle: BarLabelStyle;
     showMemoryUsage: boolean;
     showPromptCache: boolean;
     // Compatibility fallback used only until transcript tier detection has a
@@ -301,6 +312,7 @@ export const DEFAULT_CONFIG: HudConfig = {
   pathLevels: 1,
   maxWidth: null,
   forceMaxWidth: false,
+  barWidth: null,
   elementOrder: [...DEFAULT_ELEMENT_ORDER],
   projectLineOrder: [...DEFAULT_PROJECT_LINE_ORDER],
   gitStatus: {
@@ -351,6 +363,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showClaudeCodeVersion: false,
     showEffortLevel: false,
     effortFormat: 'full',
+    barLabelStyle: 'suffix',
     showMemoryUsage: false,
     showPromptCache: false,
     promptCacheTtlSeconds: 300,
@@ -454,6 +467,10 @@ function validateModelFormat(value: unknown): value is ModelFormatMode {
 
 function validateEffortFormat(value: unknown): value is EffortFormatMode {
   return value === 'full' || value === 'symbol' || value === 'text';
+}
+
+function validateBarLabelStyle(value: unknown): value is BarLabelStyle {
+  return value === 'suffix' || value === 'inline';
 }
 
 function validateTimeFormat(value: unknown): value is TimeFormatMode {
@@ -747,6 +764,12 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     ? (migrated as Record<string, unknown>).forceMaxWidth as boolean
     : DEFAULT_CONFIG.forceMaxWidth;
 
+  const rawBarWidth = (migrated as Record<string, unknown>).barWidth;
+  const barWidth = (typeof rawBarWidth === 'number' && Number.isFinite(rawBarWidth) && rawBarWidth > 0)
+    ? Math.min(Math.floor(rawBarWidth), MAX_TERMINAL_WIDTH)
+    : null;
+
+
   const gitStatus = {
     enabled: typeof migrated.gitStatus?.enabled === 'boolean'
       ? migrated.gitStatus.enabled
@@ -882,6 +905,9 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     effortFormat: validateEffortFormat(migrated.display?.effortFormat)
       ? migrated.display.effortFormat
       : DEFAULT_CONFIG.display.effortFormat,
+    barLabelStyle: validateBarLabelStyle(migrated.display?.barLabelStyle)
+      ? migrated.display.barLabelStyle
+      : DEFAULT_CONFIG.display.barLabelStyle,
     showMemoryUsage: typeof migrated.display?.showMemoryUsage === 'boolean'
       ? migrated.display.showMemoryUsage
       : DEFAULT_CONFIG.display.showMemoryUsage,
@@ -1024,7 +1050,7 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
       : DEFAULT_CONFIG.colors.barEmpty,
   };
 
-  return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, projectLineOrder, gitStatus, jjStatus, display, colors };
+  return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, barWidth, elementOrder, projectLineOrder, gitStatus, jjStatus, display, colors };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

@@ -2,8 +2,8 @@ import type { RenderContext } from "../../types.js";
 import { isLimitReached } from "../../types.js";
 import type { MessageKey } from "../../i18n/types.js";
 import { shouldHideUsage } from "../../stdin.js";
-import { critical, label, getQuotaColor, quotaBar, RESET } from "../colors.js";
-import { getAdaptiveBarWidth } from "../../utils/terminal.js";
+import { critical, label, getQuotaColor, quotaBar, labeledBar, RESET } from "../colors.js";
+import { getAdaptiveBarWidth, resolveBarWidth } from "../../utils/terminal.js";
 import { t } from "../../i18n/index.js";
 import {
   progressLabel,
@@ -56,7 +56,7 @@ export function renderUsageLine(
   const resetsKey = limitResetTimeFormat(timeFormat) === 'absolute' ? "format.resets" : "format.resetsIn";
   const usageCompact = display?.usageCompact ?? false;
   const usageValueMode = display?.usageValue ?? 'percent';
-  const barWidthForScoped = getAdaptiveBarWidth();
+  const barWidthForScoped = resolveBarWidth(ctx.config?.barWidth);
   const scopedSuffix = scopedWindows.length
     ? ' | ' + scopedWindows
         .map((w) =>
@@ -70,6 +70,7 @@ export function renderUsageLine(
                 colors,
                 usageBarEnabled: display?.usageBarEnabled ?? true,
                 barWidth: barWidthForScoped,
+                inlineLabel: display?.barLabelStyle === 'inline',
                 timeFormat,
                 showResetLabel,
                 forceLabel: true,
@@ -132,7 +133,8 @@ export function renderUsageLine(
   }
 
   const usageBarEnabled = display?.usageBarEnabled ?? true;
-  const barWidth = getAdaptiveBarWidth();
+  const barWidth = resolveBarWidth(ctx.config?.barWidth);
+  const inlineLabel = display?.barLabelStyle === 'inline';
 
   if (fiveHour === null && sevenDay === null) {
     return scopedSuffix
@@ -152,6 +154,7 @@ export function renderUsageLine(
       colors,
       usageBarEnabled,
       barWidth,
+      inlineLabel,
       timeFormat,
       showResetLabel,
       forceLabel: true,
@@ -170,6 +173,7 @@ export function renderUsageLine(
     colors,
     usageBarEnabled,
     barWidth,
+    inlineLabel,
     timeFormat,
     showResetLabel,
     usageValueMode,
@@ -186,6 +190,7 @@ export function renderUsageLine(
       colors,
       usageBarEnabled,
       barWidth,
+      inlineLabel,
       timeFormat,
       showResetLabel,
       forceLabel: true,
@@ -243,6 +248,7 @@ function formatUsageWindowPart({
   colors,
   usageBarEnabled,
   barWidth,
+  inlineLabel = false,
   timeFormat = 'relative',
   showResetLabel,
   forceLabel = false,
@@ -258,6 +264,7 @@ function formatUsageWindowPart({
   colors?: RenderContext["config"]["colors"];
   usageBarEnabled: boolean;
   barWidth: number;
+  inlineLabel?: boolean;
   timeFormat?: TimeFormatMode;
   showResetLabel: boolean;
   forceLabel?: boolean;
@@ -280,6 +287,15 @@ function formatUsageWindowPart({
     : "";
 
   if (usageBarEnabled) {
+    // Personal fork addition (Sep 5 2026): inline mode overlays the percent
+    // on the bar (labeledBar) and drops the separate usageDisplay text,
+    // since it's now redundant — the reset-time suffix stays, it's not.
+    if (inlineLabel) {
+      const barColor = getQuotaColor(percent ?? 0, colors);
+      const bar = labeledBar(percent ?? 0, barWidth, barColor, `${Math.round(percent ?? 0)}%`);
+      const body = resetSuffix ? `${bar} ${resetSuffix}` : bar;
+      return forceLabel ? `${styledLabel} ${body}` : body;
+    }
     const body = resetSuffix
       ? `${quotaBar(percent ?? 0, barWidth, colors)} ${usageDisplay} ${resetSuffix}`
       : `${quotaBar(percent ?? 0, barWidth, colors)} ${usageDisplay}`;

@@ -51,6 +51,7 @@ export const DEFAULT_CONFIG = {
     pathLevels: 1,
     maxWidth: null,
     forceMaxWidth: false,
+    barWidth: null,
     elementOrder: [...DEFAULT_ELEMENT_ORDER],
     projectLineOrder: [...DEFAULT_PROJECT_LINE_ORDER],
     gitStatus: {
@@ -101,6 +102,7 @@ export const DEFAULT_CONFIG = {
         showClaudeCodeVersion: false,
         showEffortLevel: false,
         effortFormat: 'full',
+        barLabelStyle: 'suffix',
         showMemoryUsage: false,
         showPromptCache: false,
         promptCacheTtlSeconds: 300,
@@ -193,6 +195,9 @@ function validateModelFormat(value) {
 }
 function validateEffortFormat(value) {
     return value === 'full' || value === 'symbol' || value === 'text';
+}
+function validateBarLabelStyle(value) {
+    return value === 'suffix' || value === 'inline';
 }
 function validateTimeFormat(value) {
     return value === 'relative'
@@ -438,6 +443,10 @@ export function mergeConfig(userConfig) {
     const forceMaxWidth = typeof migrated.forceMaxWidth === 'boolean'
         ? migrated.forceMaxWidth
         : DEFAULT_CONFIG.forceMaxWidth;
+    const rawBarWidth = migrated.barWidth;
+    const barWidth = (typeof rawBarWidth === 'number' && Number.isFinite(rawBarWidth) && rawBarWidth > 0)
+        ? Math.min(Math.floor(rawBarWidth), MAX_TERMINAL_WIDTH)
+        : null;
     const gitStatus = {
         enabled: typeof migrated.gitStatus?.enabled === 'boolean'
             ? migrated.gitStatus.enabled
@@ -562,6 +571,9 @@ export function mergeConfig(userConfig) {
         effortFormat: validateEffortFormat(migrated.display?.effortFormat)
             ? migrated.display.effortFormat
             : DEFAULT_CONFIG.display.effortFormat,
+        barLabelStyle: validateBarLabelStyle(migrated.display?.barLabelStyle)
+            ? migrated.display.barLabelStyle
+            : DEFAULT_CONFIG.display.barLabelStyle,
         showMemoryUsage: typeof migrated.display?.showMemoryUsage === 'boolean'
             ? migrated.display.showMemoryUsage
             : DEFAULT_CONFIG.display.showMemoryUsage,
@@ -668,7 +680,7 @@ export function mergeConfig(userConfig) {
             ? migrated.colors.barEmpty
             : DEFAULT_CONFIG.colors.barEmpty,
     };
-    return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, projectLineOrder, gitStatus, jjStatus, display, colors };
+    return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, barWidth, elementOrder, projectLineOrder, gitStatus, jjStatus, display, colors };
 }
 function isPlainObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);

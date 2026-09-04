@@ -128,4 +128,33 @@ export function coloredBar(percent, width = 10, colors, thresholds) {
     const emptyChar = colors?.barEmpty ?? '░';
     return `${color}${filledChar.repeat(filled)}${DIM}${emptyChar.repeat(empty)}${RESET}`;
 }
+const REVERSE = '\x1b[7m';
+/**
+ * Personal fork addition (Sep 5 2026): renders a bar with `label` overlaid
+ * directly on the fill instead of printed after the bar (config
+ * `barLabelStyle: "inline"`). The filled portion of the label is drawn in
+ * reverse video against `color` (a resolved ANSI escape from getQuotaColor
+ * or getContextColor) — swapping that color from foreground to background
+ * — so the text reads on top of it without needing a true RGB background
+ * color. The empty portion is plain dim text, matching the original bar's
+ * empty-cell dimming.
+ *
+ * `label` is centered within `width` cells, truncated from the right if it
+ * doesn't fit (callers should keep width >= the longest label, e.g. 5 for
+ * "100%").
+ */
+export function labeledBar(percent, width, color, label) {
+    const safeWidth = Number.isFinite(width) ? Math.max(1, Math.round(width)) : 1;
+    const safePercent = Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
+    const filled = Math.round((safePercent / 100) * safeWidth);
+    const padTotal = Math.max(0, safeWidth - label.length);
+    const padLeft = Math.floor(padTotal / 2);
+    const padRight = padTotal - padLeft;
+    const text = label.length > safeWidth
+        ? label.slice(0, safeWidth)
+        : ' '.repeat(padLeft) + label + ' '.repeat(padRight);
+    const filledPart = text.slice(0, filled);
+    const emptyPart = text.slice(filled);
+    return `${color}${REVERSE}${filledPart}${RESET}${DIM}${emptyPart}${RESET}`;
+}
 //# sourceMappingURL=colors.js.map

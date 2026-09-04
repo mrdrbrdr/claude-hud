@@ -45,3 +45,13 @@ export function getAdaptiveBarWidth(): number {
   }
   return 10;
 }
+
+// Personal fork addition (Sep 5 2026): honors the `barWidth` config field
+// (a fixed cell count, e.g. for labeledBar's text-in-bar mode) ahead of the
+// terminal-size-based tiers above. Pass `ctx.config?.barWidth`.
+export function resolveBarWidth(configuredBarWidth: number | null | undefined): number {
+  if (typeof configuredBarWidth === 'number' && Number.isFinite(configuredBarWidth) && configuredBarWidth > 0) {
+    return Math.round(configuredBarWidth);
+  }
+  return getAdaptiveBarWidth();
+}
