@@ -131,17 +131,21 @@ export function coloredBar(percent, width = 10, colors, thresholds) {
 const REVERSE = '\x1b[7m';
 /**
  * Personal fork addition (Sep 5 2026): renders a bar with `label` overlaid
- * directly on the fill instead of printed after the bar (config
- * `barLabelStyle: "inline"`). The filled portion of the label is drawn in
- * reverse video against `color` (a resolved ANSI escape from getQuotaColor
- * or getContextColor) — swapping that color from foreground to background
- * — so the text reads on top of it without needing a true RGB background
- * color. The empty portion is plain dim text, matching the original bar's
- * empty-cell dimming.
+ * on top of it instead of printed after the bar (config
+ * `barLabelStyle: "inline"`). Unlike a first draft of this, both the filled
+ * AND empty cells keep the original bar's own glyphs and coloring (█ in
+ * `color`, ░ dimmed) everywhere the label doesn't cover — only the cells the
+ * label's characters actually occupy are replaced, so "how much of the bar
+ * remains" is still visible at a glance, exactly like the un-labeled bar.
+ * The label's characters over the filled run are drawn in reverse video
+ * against `color` (swapping it from foreground to background, so the text
+ * reads on top without needing a true RGB background); over the empty run
+ * they're drawn as plain text (brighter than the dimmed ░ around them, which
+ * is deliberate — that's the part of the bar carrying the number).
  *
  * `label` is centered within `width` cells, truncated from the right if it
  * doesn't fit (callers should keep width >= the longest label, e.g. 5 for
- * "100%").
+ * "100%" with 1 cell to spare).
  */
 export function labeledBar(percent, width, color, label) {
     const safeWidth = Number.isFinite(width) ? Math.max(1, Math.round(width)) : 1;
@@ -149,12 +153,42 @@ export function labeledBar(percent, width, color, label) {
     const filled = Math.round((safePercent / 100) * safeWidth);
     const padTotal = Math.max(0, safeWidth - label.length);
     const padLeft = Math.floor(padTotal / 2);
-    const padRight = padTotal - padLeft;
-    const text = label.length > safeWidth
-        ? label.slice(0, safeWidth)
-        : ' '.repeat(padLeft) + label + ' '.repeat(padRight);
-    const filledPart = text.slice(0, filled);
-    const emptyPart = text.slice(filled);
-    return `${color}${REVERSE}${filledPart}${RESET}${DIM}${emptyPart}${RESET}`;
+    const text = label.length > safeWidth ? label.slice(0, safeWidth) : label;
+    const labelStart = label.length > safeWidth ? 0 : padLeft;
+    const labelEnd = labelStart + text.length;
+    const filledChar = '█';
+    const emptyChar = '░';
+    const kindAt = (i) => {
+        const onLabel = i >= labelStart && i < labelEnd;
+        const onFilled = i < filled;
+        if (onLabel)
+            return onFilled ? 'labelOnFilled' : 'labelOnEmpty';
+        return onFilled ? 'barFilled' : 'barEmpty';
+    };
+    let out = '';
+    let i = 0;
+    while (i < safeWidth) {
+        const kind = kindAt(i);
+        let j = i + 1;
+        while (j < safeWidth && kindAt(j) === kind)
+            j += 1;
+        const runLength = j - i;
+        switch (kind) {
+            case 'barFilled':
+                out += `${color}${filledChar.repeat(runLength)}${RESET}`;
+                break;
+            case 'barEmpty':
+                out += `${DIM}${emptyChar.repeat(runLength)}${RESET}`;
+                break;
+            case 'labelOnFilled':
+                out += `${color}${REVERSE}${text.slice(i - labelStart, j - labelStart)}${RESET}`;
+                break;
+            case 'labelOnEmpty':
+                out += text.slice(i - labelStart, j - labelStart);
+                break;
+        }
+        i = j;
+    }
+    return out;
 }
 //# sourceMappingURL=colors.js.map
