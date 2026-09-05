@@ -1,8 +1,8 @@
-# personal/ — Ozan's status-line setup
+# personal/ — status-line setup
 
 Not part of claude-hud proper, and not something upstream
 (github.com/jarrodwatts/claude-hud) would want. This directory only exists so
-the two machines that run this fork stay in sync through git instead of `scp`.
+the machines that run this fork stay in sync through git rather than by hand.
 Nothing here is imported or built by the plugin; `npm run build` ignores it.
 
 ## What's here
@@ -52,8 +52,8 @@ Then point Claude Code at it in `~/.claude/settings.json`:
 
 The wrapper runs `$HOME/sw/utilities/claude-hud/dist/index.js`, i.e. this
 checkout's build, so `npm install && npm run build` has to have been run here.
-Every path in it is `$HOME`-relative, which is what lets the same file work
-verbatim under both `/home/mrdrbrdr` and `/home/ozan`.
+Every path in it is `$HOME`-relative, which is what lets the same file install
+verbatim under any `$HOME`.
 
 ## Optional dependencies
 

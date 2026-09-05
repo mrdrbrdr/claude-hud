@@ -124,15 +124,13 @@ if [ "$input" != "$prev" ] || (( now - ran >= 60 )); then
   # Personal fork (github.com/mrdrbrdr/claude-hud, branch feat/inline-bar-labels)
   # — deliberately NOT the marketplace-installed copy, so a future
   # `claude plugin update claude-hud` can't silently swap this back out.
-  # $HOME-relative, not hardcoded: this same script is installed verbatim on
-  # the homelab (/home/ozan), so the only difference between the two machines
-  # stays in the config file, not in the code (Portable: Sep 5, 2026).
+  # $HOME-relative, never hardcoded: the same file is installed verbatim
+  # under a different $HOME elsewhere (Portable: Sep 5, 2026).
   hud="$HOME/sw/utilities/claude-hud/dist/index.js"
   # Absolute interpreter path, never a bare `node`: Claude Code spawns this
   # with the login default PATH, which drops ~/.local/bin in some contexts
-  # (see the PATH-gap section in ~/.config/README.md). First one that exists
-  # wins — /usr/bin/node on this laptop (Arch), the user-local tarball install
-  # on the homelab (Ubuntu has no system node and sudo is password-gated).
+  # First one that exists wins, covering both a system package install and a
+  # user-local tarball on a host with no system node.
   node_bin=
   for c in /usr/bin/node "$HOME/.local/opt/node/bin/node" "$HOME/.local/bin/node"; do
     [ -x "$c" ] && { node_bin=$c; break; }
@@ -146,11 +144,10 @@ fi
 
 # --- cswap account badges (always recomputed, cheap, no subprocess) --------
 # Always on every tick (not gated behind the payload-changed/60s check
-# above) so a cswap switch shows up on the very next refresh. cswap's own
-# credential store names each account's file ".creds-<N>-<email>.enc" (N =
-# the account number from `cswap list`/`cswap switch <n>`), so reading that
-# directory listing plus the live login's email out of ~/.claude.json is
-# enough to resolve which is active — no need to shell out to `cswap`.
+# above) so a cswap switch shows up on the very next refresh. The account
+# number is the one `cswap list`/`cswap switch <n>` use. Resolved from a
+# directory listing plus the live login in ~/.claude.json — nothing is opened
+# or decrypted, and no `cswap` subprocess is spawned.
 # Deliberately reads the SHARED ~/.claude.json regardless of this session's
 # own CLAUDE_CONFIG_DIR: the badge answers "which account is cswap's
 # rotation on", and cswap only ever rotates the shared home.
