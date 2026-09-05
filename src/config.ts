@@ -769,7 +769,6 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     ? Math.min(Math.floor(rawBarWidth), MAX_TERMINAL_WIDTH)
     : null;
 
-
   const gitStatus = {
     enabled: typeof migrated.gitStatus?.enabled === 'boolean'
       ? migrated.gitStatus.enabled

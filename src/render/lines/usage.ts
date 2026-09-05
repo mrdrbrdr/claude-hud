@@ -3,7 +3,7 @@ import { isLimitReached } from "../../types.js";
 import type { MessageKey } from "../../i18n/types.js";
 import { shouldHideUsage } from "../../stdin.js";
 import { critical, label, getQuotaColor, quotaBar, labeledBar, RESET } from "../colors.js";
-import { getAdaptiveBarWidth, resolveBarWidth } from "../../utils/terminal.js";
+import { resolveBarWidth } from "../../utils/terminal.js";
 import { t } from "../../i18n/index.js";
 import {
   progressLabel,
@@ -226,6 +226,15 @@ function formatCompactWindowPart(
     : `${styledLabel} ${usageDisplay}`;
 }
 
+/** The value text alone, uncolored — shared by the suffix readout below and
+ *  by the inline bar label, so the two can't drift apart. */
+function usageValueText(percent: number | null, mode: UsageValueMode = 'percent'): string {
+  if (percent === null) {
+    return "--";
+  }
+  return `${mode === 'remaining' ? Math.max(0, 100 - percent) : percent}%`;
+}
+
 function formatUsagePercent(
   percent: number | null,
   colors?: RenderContext["config"]["colors"],
@@ -234,9 +243,7 @@ function formatUsagePercent(
   if (percent === null) {
     return label("--", colors);
   }
-  const color = getQuotaColor(percent, colors);
-  const displayPercent = mode === 'remaining' ? Math.max(0, 100 - percent) : percent;
-  return `${color}${displayPercent}%${RESET}`;
+  return `${getQuotaColor(percent, colors)}${usageValueText(percent, mode)}${RESET}`;
 }
 
 function formatUsageWindowPart({
@@ -287,12 +294,18 @@ function formatUsageWindowPart({
     : "";
 
   if (usageBarEnabled) {
-    // Personal fork addition (Sep 5 2026): inline mode overlays the percent
-    // on the bar (labeledBar) and drops the separate usageDisplay text,
-    // since it's now redundant — the reset-time suffix stays, it's not.
+    // Personal fork addition (Sep 5 2026): inline mode overlays the usage
+    // value on the bar (labeledBar) and drops the separate usageDisplay
+    // text, since it's now redundant — the reset-time suffix stays, it's not.
+    //
+    // The label comes from usageValueText, the same helper the suffix uses,
+    // for two reasons: `usageValue: "remaining"` must not be silently served
+    // the USED percent instead, and a window with no data must still read
+    // "--" rather than a confident-looking "0%" — inline mode has no suffix
+    // text left to carry that distinction.
     if (inlineLabel) {
       const barColor = getQuotaColor(percent ?? 0, colors);
-      const bar = labeledBar(percent ?? 0, barWidth, barColor, `${Math.round(percent ?? 0)}%`);
+      const bar = labeledBar(percent ?? 0, barWidth, barColor, usageValueText(percent, usageValueMode));
       const body = resetSuffix ? `${bar} ${resetSuffix}` : bar;
       return forceLabel ? `${styledLabel} ${body}` : body;
     }

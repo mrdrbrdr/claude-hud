@@ -25,18 +25,29 @@ export function renderIdentityLine(ctx, labelOptions = {}) {
     const contextValue = formatContextValue(ctx, percent, contextValueMode);
     const contextValueDisplay = `${getContextColor(percent, colors, contextThresholds)}${contextValue}${RESET}`;
     // Personal fork addition (Sep 5 2026): barLabelStyle "inline" overlays the
-    // percent on the bar itself (labeledBar) instead of printing it after the
-    // bar, and skips the separate contextValueDisplay since it's now redundant.
+    // context value on the bar itself (labeledBar) instead of printing it after
+    // the bar.
+    //
+    // Only the percent-shaped contextValue modes fit inside a bar this narrow,
+    // and they become the label verbatim — writing `${percent}%` here instead
+    // would silently show the USED percent to someone who configured
+    // contextValue "remaining", i.e. a different number under the same setting.
+    // "tokens"/"both" don't fit, so they keep their readout after the bar
+    // rather than being dropped on the floor.
     const inlineLabel = display?.barLabelStyle === "inline";
     const barWidth = resolveBarWidth(ctx.config?.barWidth);
+    const contextValueFitsInBar = contextValueMode === "percent" || contextValueMode === "remaining";
     let line;
     if (display?.showContextBar === false) {
         line = `${progressLabel("label.context", colors, labelOptions)} ${contextValueDisplay}`;
     }
     else if (inlineLabel) {
         const barColor = getContextColor(percent, colors, contextThresholds);
-        const bar = labeledBar(percent, barWidth, barColor, `${Math.round(percent)}%`);
-        line = `${progressLabel("label.context", colors, labelOptions)} ${bar}`;
+        const inlineText = contextValueFitsInBar ? contextValue : `${Math.round(percent)}%`;
+        const bar = labeledBar(percent, barWidth, barColor, inlineText);
+        line = contextValueFitsInBar
+            ? `${progressLabel("label.context", colors, labelOptions)} ${bar}`
+            : `${progressLabel("label.context", colors, labelOptions)} ${bar} ${contextValueDisplay}`;
     }
     else {
         const bar = coloredBar(percent, barWidth, colors, contextThresholds);

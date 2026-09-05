@@ -1,7 +1,7 @@
 import type { RenderContext } from "../../types.js";
 import { formatBytes } from "../../memory.js";
 import { getQuotaColor, quotaBar, RESET } from "../colors.js";
-import { getAdaptiveBarWidth } from "../../utils/terminal.js";
+import { resolveBarWidth } from "../../utils/terminal.js";
 import {
   progressLabel,
   type ProgressLabelOptions,
@@ -35,7 +35,7 @@ export function renderMemoryLine(
   const percent = `${percentColor}${ctx.memoryUsage.usedPercent}%${RESET}`;
   const bar = quotaBar(
     ctx.memoryUsage.usedPercent,
-    getAdaptiveBarWidth(),
+    resolveBarWidth(ctx.config?.barWidth),
     colors,
   );
 

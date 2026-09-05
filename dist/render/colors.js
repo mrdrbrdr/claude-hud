@@ -157,7 +157,9 @@ const TRACK_BG = '\x1b[100m';
  * "100%" with 1 cell to spare).
  */
 export function labeledBar(percent, width, color, label) {
-    const safeWidth = Number.isFinite(width) ? Math.max(1, Math.round(width)) : 1;
+    // Same zero-width handling as coloredBar/quotaBar above: a 0-cell bar
+    // renders as nothing rather than being silently widened to one cell.
+    const safeWidth = Number.isFinite(width) ? Math.max(0, Math.round(width)) : 0;
     const safePercent = Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
     const filled = Math.round((safePercent / 100) * safeWidth);
     const padTotal = Math.max(0, safeWidth - label.length);

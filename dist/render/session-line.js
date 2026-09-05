@@ -1,8 +1,8 @@
 import { isLimitReached } from '../types.js';
 import { getContextPercent, getBufferedPercent, formatModelName, resolveModelName, shouldHideUsage } from '../stdin.js';
 import { getOutputSpeed } from '../speed-tracker.js';
-import { coloredBar, critical, git as gitColor, gitBranch as gitBranchColor, label, model as modelColor, project as projectColor, getContextColor, getQuotaColor, quotaBar, custom as customColor, RESET } from './colors.js';
-import { getAdaptiveBarWidth } from '../utils/terminal.js';
+import { coloredBar, labeledBar, critical, git as gitColor, gitBranch as gitBranchColor, label, model as modelColor, project as projectColor, getContextColor, getQuotaColor, quotaBar, custom as customColor, RESET } from './colors.js';
+import { resolveBarWidth } from '../utils/terminal.js';
 import { renderCostEstimate } from './lines/cost.js';
 import { renderPromptCacheLine } from './lines/prompt-cache.js';
 import { renderSessionTimeLine } from './lines/session-time.js';
@@ -39,8 +39,26 @@ export function renderSessionLine(ctx) {
         warning: display?.contextWarningThreshold,
         critical: display?.contextCriticalThreshold,
     };
-    const barWidth = getAdaptiveBarWidth();
-    const bar = coloredBar(percent, barWidth, colors, contextThresholds);
+    const contextValueMode = display?.contextValue ?? 'percent';
+    const contextValue = formatContextValue(ctx, percent, contextValueMode);
+    const contextValueDisplay = `${getContextColor(percent, colors, contextThresholds)}${contextValue}${RESET}`;
+    // Personal fork addition (Sep 5 2026): barWidth and barLabelStyle apply to
+    // the compact layout too. Without this both config fields are silent no-ops
+    // for anyone on lineLayout "compact" — this line renders its own bars rather
+    // than going through lines/identity.ts and lines/usage.ts.
+    //
+    // Same rule as identity.ts: only the percent-shaped contextValue modes fit
+    // inside a bar this narrow and become its label verbatim (so "remaining"
+    // isn't quietly served the used percent); "tokens"/"both" keep their readout
+    // beside the bar instead.
+    const barWidth = resolveBarWidth(ctx.config?.barWidth);
+    const inlineLabel = display?.barLabelStyle === 'inline';
+    const contextValueFitsInBar = contextValueMode === 'percent' || contextValueMode === 'remaining';
+    const bar = inlineLabel
+        ? labeledBar(percent, barWidth, getContextColor(percent, colors, contextThresholds), contextValueFitsInBar ? contextValue : `${Math.round(percent)}%`)
+        : coloredBar(percent, barWidth, colors, contextThresholds);
+    // Empty when the bar already carries the value, so it isn't printed twice.
+    const contextSuffix = inlineLabel && contextValueFitsInBar ? '' : ` ${contextValueDisplay}`;
     const parts = [];
     const push = (text, key = null) => parts.push({ key, text });
     const timeFormat = display?.timeFormat ?? 'relative';
@@ -49,9 +67,6 @@ export function renderSessionLine(ctx) {
         showSeconds: display?.showClockSeconds ?? false,
     };
     const resetsKey = timeFormat === 'absolute' ? 'format.resets' : 'format.resetsIn';
-    const contextValueMode = display?.contextValue ?? 'percent';
-    const contextValue = formatContextValue(ctx, percent, contextValueMode);
-    const contextValueDisplay = `${getContextColor(percent, colors, contextThresholds)}${contextValue}${RESET}`;
     const customLine = display?.customLine;
     const customLinePosition = display?.customLinePosition ?? 'last';
     if (customLine && customLinePosition === 'first') {
@@ -62,13 +77,13 @@ export function renderSessionLine(ctx) {
     // The compact layout keeps the context bar attached to the model badge, so
     // the whole cluster reorders as the coarse 'model' segment.
     if (display?.showModel !== false && display?.showContextBar !== false) {
-        push(`${modelColor(`[${modelDisplay}]`, colors)} ${bar} ${contextValueDisplay}`, 'model');
+        push(`${modelColor(`[${modelDisplay}]`, colors)} ${bar}${contextSuffix}`, 'model');
     }
     else if (display?.showModel !== false) {
         push(`${modelColor(`[${modelDisplay}]`, colors)} ${contextValueDisplay}`, 'model');
     }
     else if (display?.showContextBar !== false) {
-        push(`${bar} ${contextValueDisplay}`, 'model');
+        push(`${bar}${contextSuffix}`, 'model');
     }
     else {
         push(contextValueDisplay, 'model');
@@ -178,6 +193,7 @@ export function renderSessionLine(ctx) {
                 colors,
                 usageBarEnabled: display?.usageBarEnabled ?? true,
                 barWidth,
+                inlineLabel,
                 timeFormat,
                 showResetLabel,
                 forceLabel: true,
@@ -237,6 +253,7 @@ export function renderSessionLine(ctx) {
                         colors,
                         usageBarEnabled,
                         barWidth,
+                        inlineLabel,
                         timeFormat,
                         showResetLabel,
                         forceLabel: true,
@@ -254,6 +271,7 @@ export function renderSessionLine(ctx) {
                         colors,
                         usageBarEnabled,
                         barWidth,
+                        inlineLabel,
                         timeFormat,
                         showResetLabel,
                         usageValueMode,
@@ -268,6 +286,7 @@ export function renderSessionLine(ctx) {
                             colors,
                             usageBarEnabled,
                             barWidth,
+                            inlineLabel,
                             timeFormat,
                             showResetLabel,
                             forceLabel: true,
@@ -372,15 +391,21 @@ function formatCompactWindowPart(windowLabel, percent, resetAt, timeFormat, colo
         ? `${styledLabel} ${usageDisplay} ${label(`(${reset})`, colors)}`
         : `${styledLabel} ${usageDisplay}`;
 }
+/** The value text alone, uncolored — shared by the suffix readout and by the
+ *  inline bar label, so the two can't drift apart. */
+function usageValueText(percent, mode = 'percent') {
+    if (percent === null) {
+        return '--';
+    }
+    return `${mode === 'remaining' ? Math.max(0, 100 - percent) : percent}%`;
+}
 function formatUsagePercent(percent, colors, mode = 'percent') {
     if (percent === null) {
         return label('--', colors);
     }
-    const color = getQuotaColor(percent, colors);
-    const displayPercent = mode === 'remaining' ? Math.max(0, 100 - percent) : percent;
-    return `${color}${displayPercent}%${RESET}`;
+    return `${getQuotaColor(percent, colors)}${usageValueText(percent, mode)}${RESET}`;
 }
-function formatUsageWindowPart({ label: windowLabel, percent, resetAt, colors, usageBarEnabled, barWidth, timeFormat = 'relative', showResetLabel, forceLabel = false, usageValueMode = 'percent', windowDurationLabel, wallClockOpts, }) {
+function formatUsageWindowPart({ label: windowLabel, percent, resetAt, colors, usageBarEnabled, barWidth, inlineLabel = false, timeFormat = 'relative', showResetLabel, forceLabel = false, usageValueMode = 'percent', windowDurationLabel, wallClockOpts, }) {
     const usageDisplay = formatUsagePercent(percent, colors, usageValueMode);
     const reset = formatResetTime(resetAt, timeFormat, wallClockOpts);
     const styledLabel = label(windowLabel, colors);
@@ -392,9 +417,14 @@ function formatUsageWindowPart({ label: windowLabel, percent, resetAt, colors, u
         const barReset = timeFormat === 'relative'
             ? (reset ? `${reset} / ${windowDurationLabel ?? windowLabel}` : null)
             : (reset ? (showResetLabel ? `${t(resetsKey)} ${reset}` : reset) : null);
-        const body = barReset
-            ? `${quotaBar(percent ?? 0, barWidth, colors)} ${usageDisplay} (${barReset})`
+        // Inline mode drops the separate usageDisplay text and puts the value on
+        // the bar instead — via usageValueText, so `usageValue: "remaining"` keeps
+        // meaning remaining and a window with no data still reads "--" rather than
+        // a confident-looking "0%".
+        const usageBar = inlineLabel
+            ? labeledBar(percent ?? 0, barWidth, getQuotaColor(percent ?? 0, colors), usageValueText(percent, usageValueMode))
             : `${quotaBar(percent ?? 0, barWidth, colors)} ${usageDisplay}`;
+        const body = barReset ? `${usageBar} (${barReset})` : usageBar;
         return forceLabel ? `${styledLabel} ${body}` : body;
     }
     const resetSuffix = reset
