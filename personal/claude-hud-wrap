@@ -1,0 +1,362 @@
+#!/bin/bash
+# claude-hud wrapper — fully real-time line 2 (Rewritten: Sep 5, 2026)
+#
+# Line 1 (model+effort badge, directory, git branch, cswap account badge)
+# comes from claude-hud's own cached render — none of that is time-
+# sensitive, so it's fine for it to only refresh when Claude Code sends a
+# new payload or after 60s (see the cache-then-stale block below).
+#
+# Line 2 (context bar, usage bar(s), cache bar) is built ENTIRELY here in
+# bash+jq, from scratch, on every tick — no dependency on claude-hud's own
+# cache-then-stale cycle, so nothing on it can lag behind wall-clock time by
+# more than one refreshInterval tick (1s). claude-hud's own context/usage/
+# prompt-cache rendering — the fork's labeledBar feature, see
+# ~/sw/utilities/claude-hud — is unused here for exactly that reason (its
+# output is discarded), though it's still there and documented for anyone
+# who's fine with a payload-driven rather than truly real-time line 2.
+#
+# Debug: each session's last payload is kept at
+#   $XDG_RUNTIME_DIR/claude-hud-wrap/<session-id>.in
+set -u
+input=$(cat)
+[ -n "$input" ] || exit 0
+
+cache_dir=${XDG_RUNTIME_DIR:-/tmp}/claude-hud-wrap
+[ -d "$cache_dir" ] || mkdir -p "$cache_dir" 2>/dev/null
+
+E=$'\033'; R="$E[0m"; DIM="$E[2m"; REVERSE="$E[7m"
+TRACK_BG="$E[100m"                      # bright-black bg: the "remaining" track
+# Palette is exactly the three bar_color stops plus RED's second job as the
+# "cold"/"expired"/"limit reached" text colour. GREEN and YELLOW were
+# dropped when the bars unified (Sep 5, 2026) — leaving them defined would
+# just invite a future edit to reintroduce a second, silently different scale.
+RED="$E[31m"; BLUE="$E[94m"; MAGENTA="$E[95m"
+BAR_WIDTH=5                             # matches claude-hud/config.json's old barWidth; kept in sync by hand
+
+# --- labeled_bar PERCENT WIDTH COLOR LABEL ---------------------------------
+# Bash port of the fork's render/colors.ts labeledBar(): centers LABEL over a
+# WIDTH-cell bar, filled run in COLOR+reverse-video, empty run on TRACK_BG —
+# every cell gets that run's background whether it holds a label character
+# or a plain space, so the label always reads on a track the same width as
+# the bar, split across both colors when it straddles the fill boundary.
+labeled_bar() {
+  local percent=$1 width=$2 color=$3 label=$4
+  (( percent < 0 )) && percent=0
+  (( percent > 100 )) && percent=100
+  local filled=$(( (percent * width + 50) / 100 ))
+  (( filled > width )) && filled=$width
+  local labellen=${#label} text="$label" labelstart
+  if (( labellen > width )); then
+    text="${label:0:width}"; labelstart=0; labellen=$width
+  else
+    labelstart=$(( (width - labellen) / 2 ))
+  fi
+  local labelend=$(( labelstart + labellen ))
+  local out="" i=0
+  while (( i < width )); do
+    local onfilled=0; (( i < filled )) && onfilled=1
+    local j=$(( i + 1 ))
+    while (( j < width )); do
+      local jf=0; (( j < filled )) && jf=1
+      (( jf != onfilled )) && break
+      j=$(( j + 1 ))
+    done
+    local run="" k
+    for (( k = i; k < j; k++ )); do
+      if (( k >= labelstart && k < labelend )); then
+        run+="${text:$((k - labelstart)):1}"
+      else
+        run+=" "
+      fi
+    done
+    if (( onfilled )); then out+="${color}${REVERSE}${run}${R}"
+    else out+="${TRACK_BG}${run}${R}"
+    fi
+    i=$j
+  done
+  printf '%s' "$out"
+}
+
+# --- fmt_tokens N ------------------------------------------------------------
+# 1234 -> "1.2k", 1234567 -> "1.2M" (rounded to 1 decimal above 1M, nearest
+# whole k below it) — for recache_tokens_if_cold in the Cache segment.
+fmt_tokens() {
+  local n=$1
+  if (( n >= 1000000 )); then
+    local m=$(( (n + 50000) / 100000 ))
+    printf '%d.%dM' "$(( m / 10 ))" "$(( m % 10 ))"
+  elif (( n >= 1000 )); then
+    printf '%dk' "$(( (n + 500) / 1000 ))"
+  else
+    printf '%d' "$n"
+  fi
+}
+
+# --- fmt_relative SECONDS ---------------------------------------------------
+# Bash port of format-reset-time.ts's formatRelative(): "45m", "2h 30m"/"2h",
+# "3d 4h"/"3d" — no seconds, ever, matching claude-hud's own convention
+# (which the cache countdown used to break by showing "59m 48s").
+fmt_relative() {
+  local s=$1
+  local mins=$(( (s + 59) / 60 ))
+  if (( mins < 60 )); then printf '%dm' "$mins"; return; fi
+  local hours=$(( mins / 60 )) rem=$(( mins % 60 ))
+  if (( hours >= 24 )); then
+    local days=$(( hours / 24 )) remh=$(( hours % 24 ))
+    if (( remh > 0 )); then printf '%dd %dh' "$days" "$remh"; else printf '%dd' "$days"; fi
+    return
+  fi
+  if (( rem > 0 )); then printf '%dh %dm' "$hours" "$rem"; else printf '%dh' "$hours"; fi
+}
+
+# --- session id (cheap regex; unambiguous, single occurrence) --------------
+S='[[:space:]]*'
+re="\"session_id\"$S:$S\"([A-Za-z0-9_-]+)\""; sid=nosession; [[ $input =~ $re ]] && sid=${BASH_REMATCH[1]}
+printf '%s' "$input" > "$cache_dir/$sid.in"
+
+out="$cache_dir/$sid.out"; last="$cache_dir/$sid.in.prev"; stamp="$cache_dir/$sid.ts"
+now=$EPOCHSECONDS
+
+# --- re-run claude-hud (line 1 only) when the payload changed or is stale --
+prev=; [ -f "$last" ] && prev=$(<"$last")
+ran=0; [ -f "$stamp" ] && ran=$(<"$stamp")
+if [ "$input" != "$prev" ] || (( now - ran >= 60 )); then
+  # Personal fork (github.com/mrdrbrdr/claude-hud, branch feat/inline-bar-labels)
+  # — deliberately NOT the marketplace-installed copy, so a future
+  # `claude plugin update claude-hud` can't silently swap this back out.
+  # $HOME-relative, not hardcoded: this same script is installed verbatim on
+  # the homelab (/home/ozan), so the only difference between the two machines
+  # stays in the config file, not in the code (Portable: Sep 5, 2026).
+  hud="$HOME/sw/utilities/claude-hud/dist/index.js"
+  # Absolute interpreter path, never a bare `node`: Claude Code spawns this
+  # with the login default PATH, which drops ~/.local/bin in some contexts
+  # (see the PATH-gap section in ~/.config/README.md). First one that exists
+  # wins — /usr/bin/node on this laptop (Arch), the user-local tarball install
+  # on the homelab (Ubuntu has no system node and sudo is password-gated).
+  node_bin=
+  for c in /usr/bin/node "$HOME/.local/opt/node/bin/node" "$HOME/.local/bin/node"; do
+    [ -x "$c" ] && { node_bin=$c; break; }
+  done
+  if [ -n "$node_bin" ] && [ -f "$hud" ] && printf '%s' "$input" | COLUMNS=100 "$node_bin" "$hud" > "$out.tmp" 2>/dev/null; then
+    mv -f "$out.tmp" "$out"
+  fi
+  printf '%s' "$input" > "$last"
+  printf '%s' "$now" > "$stamp"
+fi
+
+# --- cswap account badges (always recomputed, cheap, no subprocess) --------
+# Always on every tick (not gated behind the payload-changed/60s check
+# above) so a cswap switch shows up on the very next refresh. cswap's own
+# credential store names each account's file ".creds-<N>-<email>.enc" (N =
+# the account number from `cswap list`/`cswap switch <n>`), so reading that
+# directory listing plus the live login's email out of ~/.claude.json is
+# enough to resolve which is active — no need to shell out to `cswap`.
+# Deliberately reads the SHARED ~/.claude.json regardless of this session's
+# own CLAUDE_CONFIG_DIR: the badge answers "which account is cswap's
+# rotation on", and cswap only ever rotates the shared home.
+#
+# Renders EVERY known account, not just the live one (Changed: Sep 5, 2026)
+# — "Acc: #1 #2" with the active number in cyan and the rest dimmed, so the
+# badge shows the roster and the position in it rather than a bare number
+# that gives no hint another account even exists.
+# ${f##*/} instead of basename: this whole block runs on every 1s tick, and
+# the script's design rule is no subprocesses on the tick path.
+acct_badge=; acct_num=
+claude_json="$HOME/.claude.json"
+if [ -r "$claude_json" ]; then
+  live=$(<"$claude_json")
+  re="\"emailAddress\"$S:$S\"([^\"]*)\""
+  active_email=
+  [[ $live =~ $re ]] && active_email=${BASH_REMATCH[1]}
+  declare -A acct_email=(); acct_max=0
+  for f in "$HOME"/.local/share/claude-swap/credentials/.creds-*.enc; do
+    [ -e "$f" ] || continue
+    base=${f##*/}
+    if [[ $base =~ ^\.creds-([0-9]+)-(.+)\.enc$ ]]; then
+      n=${BASH_REMATCH[1]}
+      acct_email[$n]=${BASH_REMATCH[2]}
+      (( n > acct_max )) && acct_max=$n
+    fi
+  done
+  # Iterate 1..max rather than the glob's own order: the glob sorts
+  # lexicographically, which stops matching numeric order at 10 accounts.
+  for (( n = 1; n <= acct_max; n++ )); do
+    [ -n "${acct_email[$n]:-}" ] || continue
+    if [ -n "$active_email" ] && [ "${acct_email[$n]}" = "$active_email" ]; then
+      acct_num=$n
+      acct_badge+=" $E[36m#${n}$R"
+    else
+      acct_badge+=" ${DIM}#${n}${R}"
+    fi
+  done
+  [ -n "$acct_badge" ] && acct_badge="${DIM}Acc:${R}${acct_badge}"
+fi
+
+# --- Herdr pane id (always recomputed, free — just an env var read) --------
+# Claude Code inherits its own process environment when it spawns the
+# statusLine command, so $HERDR_PANE_ID is already there whenever this
+# session itself is running inside a Herdr-managed pane, with nothing to
+# read or shell out to — and simply unset for a session that isn't, which is
+# exactly the "don't display anything otherwise" behavior asked for.
+herdr_badge=
+if [ -n "${HERDR_PANE_ID:-}" ]; then
+  herdr_badge="${DIM}${HERDR_PANE_ID}${R}"
+fi
+
+# --- line 2 fields, via one jq call (always run — this is the real-time part) --
+# Three different sections of the payload use the literal key
+# "used_percentage" (context_window, rate_limits.five_hour, .seven_day), so
+# a plain bash regex can't safely disambiguate them — jq's ~5ms here buys
+# real correctness instead of relying on field-order assumptions.
+#
+# mapfile (one jq output value per line), NOT `IFS=$'\t' read`: IFS set to a
+# whitespace character (tab included) makes bash's word-splitting collapse
+# RUNS of consecutive delimiters and treat them as one — which silently
+# drops every empty field instead of preserving its position, shifting
+# every field after it (hit this for real: a session missing five_hour data
+# came out with the seven_day percent in the five_hour slot, and prompt_cache
+# fields shifted two more past that). mapfile has no such collapsing.
+mapfile -t _f < <(printf '%s' "$input" | jq -r '
+  def r: if . == null then "" else (. | round) end;
+  (.context_window.used_percentage | r),
+  (.rate_limits.five_hour.used_percentage | r),
+  (.rate_limits.five_hour.resets_at // ""),
+  (.rate_limits.seven_day.used_percentage | r),
+  (.rate_limits.seven_day.resets_at // ""),
+  (.prompt_cache.caching_observed // false),
+  (.prompt_cache.warm // false),
+  (.prompt_cache.expires_at // ""),
+  (.prompt_cache.ttl // ""),
+  (.prompt_cache.recache_tokens_if_cold // "")
+' 2>/dev/null)
+ctx_pct=${_f[0]:-}; rl5_pct=${_f[1]:-}; rl5_reset=${_f[2]:-}; rl7_pct=${_f[3]:-}; rl7_reset=${_f[4]:-}
+pc_obs=${_f[5]:-}; pc_warm=${_f[6]:-}; pc_exp=${_f[7]:-}; pc_ttl=${_f[8]:-}; pc_cold=${_f[9]:-}
+
+# --- shared usage source (Added: Sep 5, 2026) -------------------------------
+# Each session's own rate_limits snapshot only updates when THAT session
+# talks to the API — an idle session's Usage% is frozen at whatever it was
+# told during its own last request, so two open terminals can legitimately
+# show two different (both individually correct-as-of-then) numbers. That's
+# the discrepancy Ozan was seeing. claude-swap-auto.service already polls
+# the real usage API for both accounts independently every few minutes into
+# one shared cache file, unrelated to any session's own traffic — reading
+# THAT instead makes every terminal agree, at the cost of being tied to
+# cswap's own poll cadence rather than this session's freshest possible
+# number. Falls back to the per-session stdin values above if the shared
+# cache is missing, has no data for the active account, or is stale beyond
+# 20 minutes (generous slack past cswap's longest observed ~10min interval).
+usage_json="$HOME/.local/share/claude-swap/cache/usage.json"
+if [ -n "$acct_num" ] && [ -r "$usage_json" ]; then
+  mapfile -t _u < <(jq -r --arg n "$acct_num" '
+    def rnd: if . == null then "" else (. | round | tostring) end;
+    def iso: if . == null then "" else (sub("\\.[0-9]+\\+00:00$"; "Z") | fromdateiso8601 | tostring) end;
+    .accounts[$n].lastGood as $lg | .accounts[$n].fetchedAt as $fa |
+    ($lg.five_hour.pct | rnd),
+    ($lg.five_hour.resets_at | iso),
+    ($lg.seven_day.pct | rnd),
+    ($lg.seven_day.resets_at | iso),
+    ($fa | if . == null then "" else (. | floor | tostring) end)
+  ' "$usage_json" 2>/dev/null)
+  ext_fh_pct=${_u[0]:-}; ext_fh_reset=${_u[1]:-}; ext_sd_pct=${_u[2]:-}; ext_sd_reset=${_u[3]:-}; ext_fetched=${_u[4]:-}
+  if [ -n "$ext_fetched" ] && (( now - ext_fetched <= 1200 )); then
+    [ -n "$ext_fh_pct" ] && [ -n "$ext_fh_reset" ] && { rl5_pct=$ext_fh_pct; rl5_reset=$ext_fh_reset; }
+    [ -n "$ext_sd_pct" ] && [ -n "$ext_sd_reset" ] && { rl7_pct=$ext_sd_pct; rl7_reset=$ext_sd_reset; }
+  fi
+fi
+
+# --- bar_color PERCENT -> color --------------------------------------------
+# ONE scale for all three bars (Unified: Sep 5, 2026). Thresholds and colors
+# are claude-hud's getQuotaColor: <75 bright blue, 75-89 bright magenta,
+# >=90 red. Context and Cache used to run their own green/yellow/red scales
+# on their own thresholds, which meant the same visual colour meant three
+# different things depending on which bar you were looking at — Ozan's call
+# to collapse them onto the Usage scale instead.
+#
+# Every bar feeds this the same *shape* of number: "how used up is this",
+# 0 = untouched, 100 = exhausted. For Cache that's elapsed% of the TTL, so
+# the colour tracks the bar's own fill rather than absolute minutes left.
+bar_color() {
+  local p=$1
+  if (( p >= 90 )); then printf '%s' "$RED"
+  elif (( p >= 75 )); then printf '%s' "$MAGENTA"
+  else printf '%s' "$BLUE"
+  fi
+}
+
+line2=""
+# Empty arg is a no-op, not an empty segment: the badges appended at the
+# end are optional, and without this guard a missing one would still emit
+# its separator and leave line 2 ending in a dangling "│".
+append2() { [ -n "$1" ] || return 0; [ -n "$line2" ] && line2+=" ${DIM}│${R} "; line2+="$1"; }
+
+# Usage: five-hour normally, weekly-only if five-hour is momentarily absent
+# (Claude Code drops a window once its reset time passes), plus an extra
+# weekly bar alongside five-hour once it's at/above 80%.
+if [ -n "$rl5_pct" ] && [ -n "$rl5_reset" ]; then
+  if (( rl5_pct >= 100 )); then
+    append2 "${DIM}Usage${R} ${RED}⚠ Limit reached${R}"
+  else
+    rem=$(( rl5_reset - now )); (( rem < 0 )) && rem=0
+    append2 "${DIM}Usage${R} $(labeled_bar "$rl5_pct" "$BAR_WIDTH" "$(bar_color "$rl5_pct")" "${rl5_pct}%") ($(fmt_relative "$rem"))"
+    if [ -n "$rl7_pct" ] && [ -n "$rl7_reset" ] && (( rl7_pct >= 80 )); then
+      remw=$(( rl7_reset - now )); (( remw < 0 )) && remw=0
+      append2 "${DIM}Weekly${R} $(labeled_bar "$rl7_pct" "$BAR_WIDTH" "$(bar_color "$rl7_pct")" "${rl7_pct}%") ($(fmt_relative "$remw"))"
+    fi
+  fi
+elif [ -n "$rl7_pct" ] && [ -n "$rl7_reset" ]; then
+  rem=$(( rl7_reset - now )); (( rem < 0 )) && rem=0
+  append2 "${DIM}Weekly${R} $(labeled_bar "$rl7_pct" "$BAR_WIDTH" "$(bar_color "$rl7_pct")" "${rl7_pct}%") ($(fmt_relative "$rem"))"
+fi
+
+# Context bar — bar_color, same as Usage (was its own <70 green / 70-84
+# yellow / >=85 red scale, matching claude-hud's getContextColor; that's
+# what the unification above replaced).
+if [ -n "$ctx_pct" ]; then
+  append2 "${DIM}Context${R} $(labeled_bar "$ctx_pct" "$BAR_WIDTH" "$(bar_color "$ctx_pct")" "${ctx_pct}%")"
+fi
+
+# Cache: bar fill = elapsed% of the TTL (color-thresholded on remaining
+# time), but the LABEL drawn on the bar is the remaining time itself (e.g.
+# "59m", "1h") rather than a percent, with the recache_tokens_if_cold count
+# in the trailing parens — Ozan's call: the time is the number that matters
+# at a glance, the token count is the "why care" detail.
+if [ "$pc_obs" = true ]; then
+  cold_txt=; [ -n "$pc_cold" ] && cold_txt=" ($(fmt_tokens "$pc_cold"))"
+  if [ "$pc_warm" != true ]; then
+    append2 "${DIM}Cache${R} ${RED}cold${R}${cold_txt}"
+  else
+    remc=$(( pc_exp - now ))
+    if (( remc <= 0 )); then
+      append2 "${DIM}Cache${R} ${RED}expired${R}${cold_txt}"
+    else
+      ttl_n=1; ttl_u=h
+      re='^([0-9]+)([hm])$'; [[ $pc_ttl =~ $re ]] && { ttl_n=${BASH_REMATCH[1]}; ttl_u=${BASH_REMATCH[2]}; }
+      if [ "$ttl_u" = m ]; then ttl_secs=$(( ttl_n * 60 )); else ttl_secs=$(( ttl_n * 3600 )); fi
+      (( ttl_secs <= 0 )) && ttl_secs=3600
+      elapsed_pct=$(( 100 - (remc * 100 / ttl_secs) ))
+      (( elapsed_pct < 0 )) && elapsed_pct=0
+      (( elapsed_pct > 100 )) && elapsed_pct=100
+      # bar_color on elapsed%, i.e. on the bar's own fill — NOT on absolute
+      # minutes left, which is what this used to do (>15min green, <=15min
+      # yellow, <=3min red). Consequence worth knowing: urgency is now
+      # relative to the TTL, so a 5m-TTL cache and a 1h-TTL cache go red at
+      # the same *fraction* spent (90%) rather than at the same real
+      # deadline. The label still shows absolute remaining time.
+      append2 "${DIM}Cache${R} $(labeled_bar "$elapsed_pct" "$BAR_WIDTH" "$(bar_color "$elapsed_pct")" "$(fmt_relative "$remc")")${cold_txt}"
+    fi
+  fi
+fi
+
+# --- output: line 1 (claude-hud cache + account badge), line 2 (live bars) --
+# Account roster and Herdr pane id ride at the END of line 2, past Cache
+# (Moved off line 1: Sep 5, 2026) — line 1 is identity that rarely changes,
+# line 2 is the live state, and "which account am I burning" belongs with
+# the usage/quota numbers it explains rather than next to the cwd.
+append2 "$acct_badge"
+append2 "$herdr_badge"
+
+line1=
+[ -s "$out" ] && line1=$(head -n 1 "$out")
+[ -n "$line1" ] && printf '%s\n' "$line1"
+[ -n "$line2" ] && printf '%s\n' "$line2"
+exit 0

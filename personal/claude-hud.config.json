@@ -1,0 +1,33 @@
+{
+  "lineLayout": "expanded",
+  "elementOrder": [
+    "project"
+  ],
+  "pathLevels": "full",
+  "barWidth": 5,
+  "display": {
+    "showModel": true,
+    "modelFormat": "compact",
+    "showEffortLevel": true,
+    "effortFormat": "text",
+    "showProject": true,
+    "showContextBar": true,
+    "showUsage": true,
+    "usageBarEnabled": true,
+    "timeFormat": "relative",
+    "showResetLabel": false,
+    "showDuration": false,
+    "barLabelStyle": "inline",
+    "showTools": false,
+    "showAgents": false,
+    "showTodos": false,
+    "showConfigCounts": false,
+    "showPromptCache": false
+  },
+  "gitStatus": {
+    "enabled": true,
+    "showDirty": true,
+    "showAheadBehind": true,
+    "showFileStats": false
+  }
+}
