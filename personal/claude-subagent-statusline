@@ -1,0 +1,136 @@
+#!/bin/bash
+# subagentStatusLine: prefix each subagent row with "[model] [effort]" (Added: Sep 5, 2026)
+#
+# Claude Code's own per-subagent activity rows (in the agent panel below the
+# prompt) don't show which model/effort a subagent is running on — just
+# "description · elapsed · ↓tokens tokens" (right-aligned within `columns`).
+# This overrides that row's text with a "[model] [effort]" prefix in front
+# of the same body, leaving everything else (icon, panel chrome) to Claude
+# Code itself — this script only supplies the row's text content, per the
+# documented contract:
+# https://code.claude.com/docs/en/statusline#subagent-status-lines
+#
+# Real `tasks[]` schema (captured from actual production stdin, not just the
+# docs' abstract field list — two assumptions from the first draft were
+# wrong and broke silently):
+#   - There is NO subagent-type/name field (no "general-purpose" anywhere in
+#     this hook's data — `type` is always the generic "local_agent"). Don't
+#     try to show one.
+#   - `startTime` is an EPOCH-MILLISECOND NUMBER, not an ISO8601 string —
+#     the first draft's `date -d "$start"` silently failed to parse it,
+#     which is why "how long has it been running" quietly disappeared.
+#   - `effort` is genuinely absent whenever the subagent inherited the
+#     session's own effort level rather than an explicit override (matches
+#     the docs) — which, in practice, is nearly always. Falls back to the
+#     coordinator session's OWN current effort level, read from
+#     claude-hud-wrap's per-session cache (`.effort.level` in
+#     $XDG_RUNTIME_DIR/claude-hud-wrap/<session_id>.in — refreshed every
+#     second by the main statusLine for the same session_id this hook's own
+#     stdin also carries) rather than left blank.
+set -u
+input=$(cat)
+[ -n "$input" ] || exit 0
+
+E=$'\033'; RESET="$E[0m"; DIM="$E[2m"
+CYAN="$E[36m"                    # same code as claude-hud's own model badge
+# A dim variant was tried to make this react to row focus/hover (grey until
+# selected, then bright, like the plain description text does) — confirmed
+# by capturing real stdin across a ~80s window spanning an actual hover that
+# this hook receives NO focus signal at all (every field byte-for-byte
+# identical, hover or not) and Claude Code renders `content` completely
+# literally, with no further styling layered on top of colors already set.
+# Not fixable from here; fixed to plain normal cyan, matching the main
+# status line's own model badge, always — Ozan's call once the dynamic
+# option was confirmed impossible.
+MODEL_COLOR="${CYAN}"
+
+visible_len() {
+  local s=$1 stripped
+  stripped=$(printf '%s' "$s" | sed "s/${E}\[[0-9;]*m//g")
+  printf '%s' "${#stripped}"
+}
+
+columns=$(printf '%s' "$input" | jq -r '.columns // 80')
+sid=$(printf '%s' "$input" | jq -r '.session_id // ""')
+
+# Session's own current effort, as a fallback for a task that inherited it
+# (see header comment) — read once, reused for every task below.
+session_effort=""
+if [ -n "$sid" ]; then
+  cache_in="${XDG_RUNTIME_DIR:-/tmp}/claude-hud-wrap/$sid.in"
+  [ -r "$cache_in" ] && session_effort=$(jq -r '.effort.level // ""' "$cache_in" 2>/dev/null)
+fi
+
+mapfile -t ids < <(printf '%s' "$input" | jq -r '.tasks[]?.id')
+n=${#ids[@]}
+for (( i=0; i<n; i++ )); do
+  id=${ids[$i]}
+  mapfile -t t < <(printf '%s' "$input" | jq -r --argjson i "$i" '
+    .tasks[$i] |
+    (.model // ""), (.effort // ""), (.description // ""), (.startTime // ""), (.tokenCount // "")
+  ')
+  model=${t[0]:-}; effort=${t[1]:-}; desc=${t[2]:-}; start_ms=${t[3]:-}; tokens=${t[4]:-}
+  [ -z "$effort" ] && effort=$session_effort
+
+  prefix=""
+  if [ -n "$model" ]; then
+    fam=$model
+    if [[ $model =~ ^claude-(opus|sonnet|haiku|fable)-([0-9]+)(-([0-9]+))?(-[0-9]{8})?$ ]]; then
+      f=${BASH_REMATCH[1]} major=${BASH_REMATCH[2]} minor=${BASH_REMATCH[4]}
+      f="$(tr '[:lower:]' '[:upper:]' <<< "${f:0:1}")${f:1}"
+      if [ -n "$minor" ]; then fam="$f $major.$minor"; else fam="$f $major"; fi
+    fi
+    label="$fam"
+    [ -n "$effort" ] && label+=" $effort"
+    prefix="${MODEL_COLOR}[${label}]${RESET} "
+  fi
+
+  elapsed=""
+  if [[ $start_ms =~ ^[0-9]+$ ]]; then
+    # $EPOCHSECONDS (bash 5+ builtin), NOT `date +%s%3N` (Fixed: Sep 5, 2026):
+    # Ubuntu 26.04 ships uutils coreutils, whose `date`
+    # IGNORES the %3N width modifier and prints all 9 nanosecond digits, so
+    # the old expression returned a 19-digit number there instead of 13 and
+    # elapsed came out as "496825695328h 8m". Sub-second precision was never
+    # used (output is s/m/h), and this drops a subprocess per row as a bonus.
+    now_ms=$(( EPOCHSECONDS * 1000 ))
+    diff_s=$(( (now_ms - start_ms) / 1000 )); (( diff_s < 0 )) && diff_s=0
+    if   (( diff_s < 60 )); then elapsed="${diff_s}s"
+    elif (( diff_s < 3600 )); then elapsed="$(( diff_s/60 ))m"
+    else elapsed="$(( diff_s/3600 ))h $(( (diff_s%3600)/60 ))m"
+    fi
+  fi
+
+  toktxt=""
+  if [[ $tokens =~ ^[0-9]+$ ]]; then
+    if (( tokens >= 1000 )); then
+      d=$(( (tokens % 1000) / 100 ))
+      if (( d > 0 )); then toktxt="$(( tokens/1000 )).${d}k"; else toktxt="$(( tokens/1000 ))k"; fi
+    else
+      toktxt="$tokens"
+    fi
+  fi
+
+  right=""
+  [ -n "$elapsed" ] && right="$elapsed"
+  if [ -n "$toktxt" ]; then
+    [ -n "$right" ] && right+=" · "
+    right+="↓${toktxt} tokens"
+  fi
+
+  left="${prefix}${desc}"
+  content="$left"
+  if [ -n "$right" ]; then
+    right_dim="${DIM}${right}${RESET}"
+    left_len=$(visible_len "$left"); right_len=$(visible_len "$right")
+    pad=$(( columns - left_len - right_len ))
+    if (( pad > 1 )); then
+      spacer=""; printf -v spacer '%*s' "$pad" ''
+      content="${left}${spacer}${right_dim}"
+    else
+      content="${left} · ${right_dim}"
+    fi
+  fi
+
+  jq -cn --arg id "$id" --arg content "$content" '{id: $id, content: $content}'
+done

@@ -121,7 +121,7 @@ now=$EPOCHSECONDS
 prev=; [ -f "$last" ] && prev=$(<"$last")
 ran=0; [ -f "$stamp" ] && ran=$(<"$stamp")
 if [ "$input" != "$prev" ] || (( now - ran >= 60 )); then
-  # Personal fork (github.com/mrdrbrdr/claude-hud, branch feat/inline-bar-labels)
+  # Personal fork (github.com/mrdrbrdr/claude-hud, branch main)
   # — deliberately NOT the marketplace-installed copy, so a future
   # `claude plugin update claude-hud` can't silently swap this back out.
   # $HOME-relative, never hardcoded: the same file is installed verbatim

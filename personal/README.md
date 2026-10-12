@@ -11,6 +11,7 @@ Nothing here is imported or built by the plugin; `npm run build` ignores it.
 |---|---|---|
 | `claude-hud-wrap` | `~/.local/bin/claude-hud-wrap` | The actual `statusLine.command`. Keeps claude-hud's **line 1** and rebuilds **line 2** from scratch in bash+jq on every tick. |
 | `claude-hud.config.json` | `~/.claude/plugins/claude-hud/config.json` | claude-hud's own config — drives line 1 only, since line 2 is the wrapper's. |
+| `claude-subagent-statusline` | `~/.local/bin/claude-subagent-statusline` | The `subagentStatusLine.command`. Prefixes each subagent row in the agent panel with `[model] [effort]`. |
 
 ## Why the wrapper exists
 
@@ -42,12 +43,14 @@ or embedded here.
 ```bash
 install -Dm755 personal/claude-hud-wrap ~/.local/bin/claude-hud-wrap
 install -Dm644 personal/claude-hud.config.json ~/.claude/plugins/claude-hud/config.json
+install -Dm755 personal/claude-subagent-statusline ~/.local/bin/claude-subagent-statusline
 ```
 
-Then point Claude Code at it in `~/.claude/settings.json`:
+Then point Claude Code at them in `~/.claude/settings.json`:
 
 ```json
-"statusLine": { "type": "command", "command": "~/.local/bin/claude-hud-wrap", "refreshInterval": 1 }
+"statusLine": { "type": "command", "command": "~/.local/bin/claude-hud-wrap", "refreshInterval": 1 },
+"subagentStatusLine": { "type": "command", "command": "~/.local/bin/claude-subagent-statusline" }
 ```
 
 The wrapper runs `$HOME/sw/utilities/claude-hud/dist/index.js`, i.e. this
