@@ -57,7 +57,7 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // ""')
 # (see header comment) — read once, reused for every task below.
 session_effort=""
 if [ -n "$sid" ]; then
-  cache_in="${XDG_RUNTIME_DIR:-/tmp}/claude-hud-wrap/$sid.in"
+  cache_in="${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}/claude-hud-wrap/$sid.in"  # same dir as claude-hud-wrap
   [ -r "$cache_in" ] && session_effort=$(jq -r '.effort.level // ""' "$cache_in" 2>/dev/null)
 fi
 

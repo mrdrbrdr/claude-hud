@@ -21,8 +21,11 @@ set -u
 input=$(cat)
 [ -n "$input" ] || exit 0
 
-cache_dir=${XDG_RUNTIME_DIR:-/tmp}/claude-hud-wrap
-[ -d "$cache_dir" ] || mkdir -p "$cache_dir" 2>/dev/null
+# Private per-user dir, never shared /tmp (Fixed: Oct 12, 2026): with no
+# XDG_RUNTIME_DIR the old /tmp fallback was a predictable world-writable path
+# another local user could pre-create to read payloads or plant symlinks.
+cache_dir=${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}/claude-hud-wrap
+[ -d "$cache_dir" ] || mkdir -p -m 700 "$cache_dir" 2>/dev/null
 
 E=$'\033'; R="$E[0m"; DIM="$E[2m"; REVERSE="$E[7m"
 TRACK_BG="$E[100m"                      # bright-black bg: the "remaining" track
